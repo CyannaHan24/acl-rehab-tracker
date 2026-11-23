@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#edf4f2">
+<meta name="description" content="制定康复训练计划，记录每日进度。">
+<title>ACL 康复训练</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#edf4f2;color:#17332f;font:16px system-ui,sans-serif}main{max-width:560px;margin:auto;padding:20px 14px}header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}.brand{font-weight:800;letter-spacing:-.03em}button,input,select{font:inherit}button{cursor:pointer;min-height:44px;border:0;border-radius:12px;background:#deeee8;color:#13463a;padding:0 12px;font-weight:700}button.primary{background:#155949;color:white}button:disabled{opacity:.45;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #ba602a;outline-offset:2px}h1{margin:0;font-size:2rem;letter-spacing:-.06em}h2{margin:0 0 12px;font-size:1.3rem}p{margin:0}.summary{border-radius:18px;background:#164b40;color:#fff;padding:12px 15px;margin-bottom:10px}.summary-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.summary p{font-size:.875rem}.meter{height:5px;background:#ffffff40;border-radius:5px;margin-top:8px;overflow:hidden}.meter span{display:block;height:100%;background:#bde78b}.list{background:#fff;border:1px solid #d7e6df;border-radius:16px;overflow:hidden}.row{display:flex;align-items:center;gap:8px;padding:4px 8px;min-height:62px}.row+.row{border-top:1px solid #e4eeea}.inspect{background:transparent;text-align:left;flex:1;min-width:0;padding:3px 5px}.name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{font-size:.875rem;color:#45625a;font-weight:500;display:flex;flex-wrap:wrap;gap:0 8px}.left{color:#155949;font-weight:700}.quick{min-width:65px;white-space:nowrap}.note{font-size:.875rem;color:#45625a;margin-top:10px}.empty{padding:14px}dialog{width:min(96%,480px);max-height:88dvh;margin:auto;border:1px solid #d7e6df;border-radius:20px;padding:18px;background:#fff;color:inherit}dialog::backdrop{background:#0b282599}.dialog-head,.actions,.entry{display:flex;align-items:center;justify-content:space-between;gap:8px}.dialog-head h2{margin:0}.actions{justify-content:flex-end;margin-top:12px;flex-wrap:wrap}.stack{display:grid;gap:10px;margin-top:12px}label{display:grid;gap:4px;font-weight:650}input,select{width:100%;min-height:44px;border:1px solid #a8c0b8;border-radius:10px;padding:8px;color:inherit;background:#fff}.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.entry{border-bottom:1px solid #e4eeea;padding:4px 0}.entry span{flex:1}.entry button{font-size:.875rem}.plan-name{overflow-wrap:anywhere}.error{color:#9a3326;margin-top:8px}.hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+@media(max-height:690px){main{padding-top:10px}header{margin-bottom:6px}.row{min-height:56px}}
+
+.nav{display:flex;gap:6px}.badge-list{display:grid;gap:8px;list-style:none;margin:0;padding:0}.badge{display:flex;align-items:center;gap:12px;border:1px solid #d7e6df;border-radius:14px;padding:10px}.badge.earned{border-color:#d7b75c;background:#fff7df}.badge-icon{display:grid;place-items:center;background:#edf4f2;border-radius:50%;width:44px;height:44px;flex:none;font-size:1.4rem}.earned .badge-icon{background:#f9e4a3}.badge strong{display:block}.badge small{color:#45625a}.star{color:#a56500}
+</style>
+<main>
+<header><span class="brand">ACL 康复训练</span><div class="nav"><button id="rewards">徽章</button><button id="plan">训练计划</button></div></header>
+<section class="summary" aria-labelledby="today"><div class="summary-top"><h1 id="today">今日训练</h1><p id="date"></p></div><div class="summary-top"><p id="count"></p><p id="stars"></p></div><div class="meter" aria-hidden="true"><span id="fill"></span></div></section>
+<section class="list" id="list" aria-label="今日训练项目"></section>
+<p class="note" id="hint" hidden>当前包含示例项目，可在「训练计划」中替换为你的康复安排。</p>
+<p class="error" id="error" role="alert"></p><p class="hidden" id="status" role="status"></p>
+</main>
+<dialog id="dialog"></dialog>
+<script>
+const key = 'acl-rehab-v1';
+const examples = [
+  ['Quad sets',10,3,'reps'], ['Heel slides',10,3,'reps'],
+  ['Straight leg raises',8,3,'reps'], ['Ankle pumps',20,2,'reps'],
+  ['Seated knee bends',10,2,'reps'], ['Heel prop',30,3,'sec']
+].map(([name,amount,sets,unit], index) => ({id:'demo-'+index,name,amount,sets,unit,active:true,demo:true}));
+const el = id => document.getElementById(id);
+const demoNames = ['股四头肌等长收缩','足跟滑动','直腿抬高','踝泵训练','坐姿屈膝','足跟垫高伸膝'];
+const displayName = item => item.demo ? demoNames[Number(item.id.slice(5))] ?? item.name : item.name;
+const unitLabel = unit => unit === 'sec' ? '秒' : '次';
+let state = {plan:examples,days:{}};
+try {
+  const saved = localStorage.getItem(key);
+  if (saved) state = JSON.parse(saved);
+} catch {
+  el('error').textContent = '无法读取已保存的数据。';
+}
+const dialog = el('dialog');
+let view = null;
+let previousDay;
+function dayKey(now = new Date()) {
+  return [now.getFullYear(),now.getMonth()+1,now.getDate()].map(n => String(n).padStart(2,'0')).join('-');
+}
+const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const current = id => state.plan.find(item => item.id === id);
+const history = id => state.days[dayKey()]?.[id]?.entries ?? [];
+function totals(item) {
+  const done = history(item.id).reduce((sum, entry) => sum + entry.amount, 0);
+  return {done,left:Math.max(0,item.amount*item.sets-done)};
+}
+function rewardStats() {
+  const today = dayKey();
+  const active = state.plan.filter(item => item.active);
+  const todayStars = active.filter(item => totals(item).left === 0).length;
+  let stars = todayStars;
+  let fullDays = Number(active.length > 0 && todayStars === active.length);
+  for (const [date,day] of Object.entries(state.days)) {
+    if (date >= today) continue;
+    const completed = new Set(Object.entries(day).filter(([,record]) =>
+      record.entries.reduce((sum,entry) => sum + entry.amount,0) >= record.target.amount * record.target.sets
+    ).map(([id]) => id));
+    const plan = state.dailyPlans?.[date];
+    stars += plan ? plan.filter(id => completed.has(id)).length : completed.size;
+    if (plan?.length && plan.every(id => completed.has(id))) fullDays++;
+  }
+  return {todayStars,stars,fullDays};
+}
+function save(update) {
+  const next = structuredClone(state);
+  update(next);
+  const date = dayKey();
+  if (next.days[date]) {
+    const active = next.plan.filter(item => item.active);
+    (next.dailyPlans ??= {})[date] = active.map(item => item.id);
+    for (const item of active) {
+      const record = next.days[date][item.id];
+      if (record) record.target = {...item};
+    }
+  }
+  try {
+    localStorage.setItem(key,JSON.stringify(next));
+  } catch {
+    el('error').textContent = '保存失败，请检查浏览器是否允许本站存储数据。';
+    return false;
+  }
+  el('error').textContent = '';
+  state = next;
+  render();
+  return true;
+}
+function render() {
+  previousDay = dayKey();
+  const active = state.plan.filter(item => item.active);
+  const finished = active.filter(item => totals(item).left === 0).length;
+  el('date').textContent = new Intl.DateTimeFormat('zh-CN',{weekday:'short',month:'short',day:'numeric'}).format(new Date());
+  el('count').textContent = active.length ? '已完成 '+finished+' / '+active.length+' 项' : '今日暂无训练';
+  el('stars').textContent = '★ 今日 '+finished+' 星';
+  el('fill').style.width = (active.length ? finished/active.length*100 : 0)+'%';
+  el('hint').hidden = !active.some(item => item.demo);
+  el('list').innerHTML = active.map(item => {
+    const {left} = totals(item);
+    return '<div class="row"><button class="inspect" data-action="detail" data-id="'+item.id+'"><span class="name">'+escapeHtml(displayName(item))+'</span><span class="meta"><span>'+item.sets+' × '+item.amount+' '+unitLabel(item.unit)+'</span><span class="left">'+(left ? '剩余 '+left+' '+unitLabel(item.unit) : '<span class="star">★</span> 已完成')+'</span></span></button><button class="quick" data-action="quick" data-id="'+item.id+'" aria-label="记录 '+item.amount+' '+unitLabel(item.unit)+' · '+escapeHtml(displayName(item))+'" '+(left ? '' : 'disabled')+'>+'+item.amount+'</button></div>';
+  }).join('') || '<p class="empty">在「训练计划」中添加或恢复训练项目。</p>';
+}
+function log(id,amount,index) {
+  const item = current(id);
+  if (!item?.active) return false;
+  if (!save(next => {
+    const day = next.days[dayKey()] ??= {};
+    const record = day[id] ??= {target:{...item},entries:[]};
+    record.target = {...item};
+    if (index === undefined) record.entries.push({amount});
+    else if (amount === 0) record.entries.splice(index,1);
+    else record.entries[index].amount = amount;
+  })) return false;
+  el('status').textContent = displayName(item)+'已更新，剩余 '+totals(item).left+' '+unitLabel(item.unit)+'。';
+  return true;
+}
+function open(type,id,index) {
+  view = {type,id,index};
+  const item = current(id);
+  let title;
+  let body;
+  if (type === 'plan') {
+    title = '训练计划';
+    body = '<div class="stack">'+state.plan.map(entry => '<div class="entry"><span class="plan-name"><strong>'+escapeHtml(displayName(entry))+'</strong><br><small>'+entry.sets+' × '+entry.amount+' '+unitLabel(entry.unit)+(entry.active ? '' : ' · 已暂停')+'</small></span><button data-action="edit" data-id="'+entry.id+'">编辑</button><button data-action="toggle" data-id="'+entry.id+'">'+(entry.active ? '暂停' : '恢复')+'</button></div>').join('')+'<button class="primary" data-action="edit">添加训练</button><p class="note">计划和记录保存在当前浏览器，刷新后仍会保留。</p></div>';
+  } else if (type === 'rewards') {
+    title = '康复徽章';
+    const {stars,fullDays} = rewardStats();
+    const badges = [
+      ['✦','初次达标','完成一项训练的每日目标',stars >= 1],
+      ['☀','今日全勤','有一天完成全部训练',fullDays >= 1],
+      ['✿','持续进步','累计获得 10 颗星',stars >= 10],
+      ['♛','康复里程碑','累计 7 天完成全部训练',fullDays >= 7]
+    ];
+    body = '<div class="stack"><p>累计 <strong>'+stars+' 星</strong> · 全勤 <strong>'+fullDays+' 天</strong></p><p class="note">每项训练达到当天目标可获得 1 星。</p><ul class="badge-list">'+badges.map(([icon,name,description,earned]) =>
+      '<li class="badge '+(earned ? 'earned' : '')+'"><span class="badge-icon" aria-hidden="true">'+icon+'</span><div><strong>'+name+'</strong><small>'+description+' · '+(earned ? '已解锁' : '未解锁')+'</small></div></li>'
+    ).join('')+'</ul></div>';
+  } else if (type === 'edit') {
+    title = item ? '编辑训练' : '添加训练';
+    body = '<form class="stack"><label>训练名称<input name="name" required maxlength="80" value="'+escapeHtml(item ? displayName(item) : '')+'"></label><label>单位<select name="unit"><option value="reps">次数</option><option value="sec" '+(item?.unit === 'sec' ? 'selected' : '')+'>秒</option></select></label><div class="two"><label>每组数量<input name="amount" type="number" min="1" max="9999" required value="'+(item?.amount ?? 10)+'"></label><label>每日组数<input name="sets" type="number" min="1" max="999" required value="'+(item?.sets ?? 3)+'"></label></div><div class="actions"><button type="button" data-action="plan">返回计划</button><button class="primary">保存训练</button></div></form>';
+  } else {
+    title = escapeHtml(displayName(item));
+    const {done,left} = totals(item);
+    const entries = history(id);
+    const amount = index === undefined ? '' : entries[index].amount;
+    body = '<div class="stack"><p>'+item.sets+' 组 × '+item.amount+' '+unitLabel(item.unit)+' · '+done+' '+unitLabel(item.unit)+'已记录 · 剩余 '+left+' '+unitLabel(item.unit)+'</p><form><label>'+(index === undefined ? '本次完成量' : '修改记录')+' ('+unitLabel(item.unit)+')<input type="number" name="amount" min="1" max="9999" required value="'+amount+'"></label><div class="actions">'+(index === undefined ? '' : '<button type="button" data-action="remove" data-id="'+id+'" data-index="'+index+'">删除记录</button>')+'<button class="primary">'+(index === undefined ? '记录' : '保存修改')+'</button></div></form>'+(entries.length ? '<div><strong>今日记录</strong>'+entries.map((entry,i) => '<div class="entry"><span>'+entry.amount+' '+unitLabel(item.unit)+'</span><button data-action="detail" data-id="'+id+'" data-index="'+i+'">编辑</button></div>').join('')+'</div>' : '')+'</div>';
+  }
+  dialog.innerHTML = '<div class="dialog-head"><h2 id="dialog-title">'+title+'</h2><button data-action="close" aria-label="关闭">关闭</button></div>'+body+'<p id="dialog-error" class="error" role="alert"></p>';
+  dialog.setAttribute('aria-labelledby','dialog-title');
+  if (!dialog.open) dialog.showModal();
+}
+el('rewards').onclick = () => open('rewards');
+el('plan').onclick = () => open('plan');
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const {action,id,index} = button.dataset;
+  if (action === 'close') dialog.close();
+  if (action === 'plan') open('plan');
+  if (action === 'edit') open('edit',id);
+  if (action === 'detail') open('detail',id,index === undefined ? undefined : Number(index));
+  if (action === 'quick') {
+    log(id,current(id).amount);
+    el('list').querySelector('[data-action="detail"][data-id="'+id+'"]')?.focus();
+  }
+  if (action === 'toggle') {
+    if (save(next => {next.plan.find(item => item.id === id).active = !current(id).active;})) open('plan');
+    else el('dialog-error').textContent = el('error').textContent;
+  }
+  if (action === 'remove' && log(id,0,Number(index))) open('detail',id);
+});
+dialog.addEventListener('submit', event => {
+  event.preventDefault();
+  const data = new FormData(event.target);
+  const {type,id,index} = view;
+  if (type === 'edit') {
+    const name = data.get('name').trim();
+    if (!name) {el('dialog-error').textContent = '请输入训练名称。';return;}
+    const values = {name,amount:Number(data.get('amount')),sets:Number(data.get('sets')),unit:data.get('unit'),demo:false};
+    if (id && values.unit !== current(id).unit && history(id).length) {
+      el('dialog-error').textContent = '请先删除今天的记录，再修改计量单位。';
+      return;
+    }
+    if (save(next => {
+      if (id) Object.assign(next.plan.find(item => item.id === id),values);
+      else next.plan.push({id:crypto.randomUUID?.() ?? Date.now().toString(36)+Math.random().toString(36).slice(2),active:true,...values});
+    })) {open('plan');return;}
+  } else if (log(id,Number(data.get('amount')),index)) {open('detail',id);return;}
+  el('dialog-error').textContent = el('error').textContent;
+});
+function checkDay() {
+  if (previousDay === dayKey()) return;
+  if (dialog.open && view.type === 'detail') dialog.close();
+  render();
+  if (dialog.open && view.type === 'rewards') open('rewards');
+}
+setInterval(checkDay,15000);
+document.addEventListener('visibilitychange',checkDay);
+render();
+</script>
+</html>
